@@ -65,3 +65,7 @@ resources/examples/airflow/logs/*
 
 # Cloud Demo
 !airbyte-webapp/src/packages/cloud/data
+airbyte-integrations/connectors/source-zendesk-support/source_zendesk_support/streams.py
+
+venv
+bin

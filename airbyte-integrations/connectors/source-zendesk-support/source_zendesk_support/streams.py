@@ -69,6 +69,21 @@ class BaseSourceZendeskSupportStream(HttpStream, ABC):
         self._start_date = start_date
         self._subdomain = subdomain
 
+    def request_kwargs(
+        self,
+        stream_state: Mapping[str, Any],
+        stream_slice: Mapping[str, Any] = None,
+        next_page_token: Mapping[str, Any] = None,
+    ) -> Mapping[str, Any]:
+        """
+        Override to return a mapping of keyword arguments to be used when creating the HTTP request.
+        Any option listed in https://docs.python-requests.org/en/latest/api/#requests.adapters.BaseAdapter.send for can be returned from
+        this method. Note that these options do not conflict with request-level options such as headers, request params, etc..
+        """
+        return {
+            "timeout": 60
+        }
+
     def backoff_time(self, response: requests.Response) -> Union[int, float]:
         """
         The rate limit is 700 requests per minute
@@ -329,6 +344,9 @@ class SourceZendeskSupportCursorPaginationStream(SourceZendeskSupportFullRefresh
 
     next_page_field = "next_page"
     prev_start_time = None
+    total_processed_records = 0
+    pagination = 0
+    pagination_limit = 1
 
     def get_updated_state(self, current_stream_state: MutableMapping[str, Any], latest_record: Mapping[str, Any]) -> Mapping[str, Any]:
         # try to save maximum value of a cursor field
@@ -337,10 +355,14 @@ class SourceZendeskSupportCursorPaginationStream(SourceZendeskSupportFullRefresh
         return {self.cursor_field: max(new_value, old_value)}
 
     def next_page_token(self, response: requests.Response) -> Optional[Mapping[str, Any]]:
-        start_time = dict(parse_qsl(urlparse(response.json().get(self.next_page_field), "").query)).get("start_time")
-        if start_time != self.prev_start_time:
-            self.prev_start_time = start_time
-            return {self.cursor_field: int(start_time)}
+        if self.pagination >= self.pagination_limit:
+            return None
+        else:
+            start_time = dict(parse_qsl(urlparse(response.json().get(self.next_page_field), "").query)).get("start_time")
+            if start_time != self.prev_start_time:
+                self.prev_start_time = start_time
+                self.pagination += 1
+                return {self.cursor_field: int(start_time)}
 
     def check_stream_state(self, stream_state: Mapping[str, Any] = None):
         """
