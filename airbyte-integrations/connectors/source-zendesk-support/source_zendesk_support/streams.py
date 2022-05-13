@@ -346,7 +346,7 @@ class SourceZendeskSupportCursorPaginationStream(SourceZendeskSupportFullRefresh
     prev_start_time = None
     total_processed_records = 0
     pagination = 0
-    pagination_limit = 1
+    pagination_limit = 100
 
     def get_updated_state(self, current_stream_state: MutableMapping[str, Any], latest_record: Mapping[str, Any]) -> Mapping[str, Any]:
         # try to save maximum value of a cursor field
@@ -355,6 +355,7 @@ class SourceZendeskSupportCursorPaginationStream(SourceZendeskSupportFullRefresh
         return {self.cursor_field: max(new_value, old_value)}
 
     def next_page_token(self, response: requests.Response) -> Optional[Mapping[str, Any]]:
+        self.logger.info(f"Pagination - {self.pagination}")
         if self.pagination >= self.pagination_limit:
             return None
         else:
@@ -377,7 +378,10 @@ class SourceZendeskSupportCursorPaginationStream(SourceZendeskSupportFullRefresh
         next_page_token = next_page_token or {}
         parsed_state = self.check_stream_state(stream_state)
         if self.cursor_field:
-            params = {"start_time": next_page_token.get(self.cursor_field, parsed_state)}
+            if isinstance(next_page_token, dict):
+                params = {"start_time": next_page_token.get(self.cursor_field, parsed_state)}
+            else:
+                params = {"start_time": parsed_state}
         else:
             params = {"start_time": calendar.timegm(pendulum.parse(self._start_date).utctimetuple())}
         return params
@@ -499,28 +503,41 @@ class GroupMemberships(SourceZendeskSupportCursorPaginationStream):
     cursor_field = "updated_at"
 
 
-class SatisfactionRatings(SourceZendeskSupportStream):
+class SatisfactionRatings(SourceZendeskSupportCursorPaginationStream):
     """SatisfactionRatings stream: https://developer.zendesk.com/api-reference/ticketing/ticket-management/satisfaction_ratings/
-
     The ZenDesk API for this stream provides the filter "start_time" that can be used for incremental logic
     """
+
+    page_size = 1000
+    # ticket audits doesn't have the 'updated_by' field
+    cursor_field = "created_at"
+    pagination = 0
+    pagination_limit = 100
+
+    # Root of response is 'audits'. As rule as an endpoint name is equal a response list name
+    response_list_name = "satisfaction_ratings"
 
     def request_params(
         self, stream_state: Mapping[str, Any] = None, next_page_token: Mapping[str, Any] = None, **kwargs
     ) -> MutableMapping[str, Any]:
         """Adds the filtering field 'start_time'"""
         params = super().request_params(stream_state=stream_state, next_page_token=next_page_token, **kwargs)
-        start_time = self.str2unixtime((stream_state or {}).get(self.cursor_field))
+        params.update({
+            "sort_by": self.cursor_field,
+            "order": "asc",
+            "limit": self.page_size,
+            "cursor": next_page_token
+        })
 
-        if not start_time:
-            start_time = self.str2unixtime(self._start_date)
-        params.update(
-            {
-                "start_time": start_time,
-                "sort_by": "asc",
-            }
-        )
+
         return params
+
+    def next_page_token(self, response: requests.Response) -> Optional[Mapping[str, Any]]:
+        if self.pagination >= self.pagination_limit:
+            return None
+        else:
+            self.pagination += 1
+            return response.json().get("after_cursor")
 
 
 class TicketFields(SourceZendeskSupportStream):
