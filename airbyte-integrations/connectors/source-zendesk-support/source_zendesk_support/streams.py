@@ -214,7 +214,7 @@ class SourceZendeskSupportStream(BaseSourceZendeskSupportStream):
         stream_state: Mapping[str, Any] = None,
     ):
         records_count = self.get_api_records_count(stream_slice=stream_slice, stream_state=stream_state)
-
+        self.logger.info(f"{self.name} - Uso generate_future_requests")
         page_count = ceil(records_count / self.page_size)
         for page_number in range(1, page_count + 1):
             params = self.request_params(stream_state=stream_state, stream_slice=stream_slice)
@@ -345,8 +345,6 @@ class SourceZendeskSupportCursorPaginationStream(SourceZendeskSupportFullRefresh
     next_page_field = "next_page"
     prev_start_time = None
     total_processed_records = 0
-    pagination = 0
-    pagination_limit = 100
 
     def get_updated_state(self, current_stream_state: MutableMapping[str, Any], latest_record: Mapping[str, Any]) -> Mapping[str, Any]:
         # try to save maximum value of a cursor field
@@ -355,15 +353,10 @@ class SourceZendeskSupportCursorPaginationStream(SourceZendeskSupportFullRefresh
         return {self.cursor_field: max(new_value, old_value)}
 
     def next_page_token(self, response: requests.Response) -> Optional[Mapping[str, Any]]:
-        self.logger.info(f"Pagination - {self.pagination}")
-        if self.pagination >= self.pagination_limit:
-            return None
-        else:
-            start_time = dict(parse_qsl(urlparse(response.json().get(self.next_page_field), "").query)).get("start_time")
-            if start_time != self.prev_start_time:
-                self.prev_start_time = start_time
-                self.pagination += 1
-                return {self.cursor_field: int(start_time)}
+        start_time = dict(parse_qsl(urlparse(response.json().get(self.next_page_field), "").query)).get("start_time")
+        if start_time != self.prev_start_time:
+            self.prev_start_time = start_time
+            return {self.cursor_field: int(start_time)}
 
     def check_stream_state(self, stream_state: Mapping[str, Any] = None):
         """
@@ -511,8 +504,6 @@ class SatisfactionRatings(SourceZendeskSupportCursorPaginationStream):
     page_size = 1000
     # ticket audits doesn't have the 'updated_by' field
     cursor_field = "created_at"
-    pagination = 0
-    pagination_limit = 100
 
     # Root of response is 'audits'. As rule as an endpoint name is equal a response list name
     response_list_name = "satisfaction_ratings"
@@ -533,11 +524,7 @@ class SatisfactionRatings(SourceZendeskSupportCursorPaginationStream):
         return params
 
     def next_page_token(self, response: requests.Response) -> Optional[Mapping[str, Any]]:
-        if self.pagination >= self.pagination_limit:
-            return None
-        else:
-            self.pagination += 1
-            return response.json().get("after_cursor")
+        return response.json().get("after_cursor")
 
 
 class TicketFields(SourceZendeskSupportStream):
