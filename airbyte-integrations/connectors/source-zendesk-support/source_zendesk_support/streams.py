@@ -277,29 +277,59 @@ class SourceZendeskSupportStream(BaseSourceZendeskSupportStream):
         self.generate_future_requests(sync_mode=sync_mode, cursor_field=cursor_field, stream_slice=stream_slice, stream_state=stream_state)
 
         while len(self.future_requests) > 0:
+            fila = len(self.future_requests)
             item = self.future_requests.popleft()
 
-            response = item["future"].result()
+            try:
+                response = item["future"].result()
+                rate_limit = float(response.headers.get("x-rate-limit", 0))
+                if rate_limit and rate_limit > 0:
+                    sleep_time = (60.0 / rate_limit)
+                    time.sleep(sleep_time)
 
-            if self.should_retry(response):
-                backoff_time = self.backoff_time(response)
-                if item["retries"] == self.max_retries:
-                    raise DefaultBackoffException(request=item["request"], response=response)
+                rate_limit = response.headers.get('x-rate-limit')
+                rate_limit_remaining = response.headers.get('x-rate-limit-remaining')
+
+                self.logger.info(f"rate_limit - {rate_limit_remaining}/{rate_limit} - fila - {fila}")
+
+                if self.should_retry(response):
+                    backoff_time = self.backoff_time(response)
+                    # backoff_time = 60
+                    retries = item["retries"]
+
+                    self.logger.info(f"retries - {retries} - backoff_time - {backoff_time} - response - {response}")
+                    if item["retries"] == self.max_retries:
+                        raise DefaultBackoffException(request=item["request"], response=response)
+                    else:
+                        # if response.elapsed.total_seconds() < backoff_time:
+                        #     time.sleep(backoff_time - response.elapsed.total_seconds())
+
+                        self.future_requests.append(
+                            {
+                                "future": self._send_request(item["request"], item["request_kwargs"]),
+                                "request": item["request"],
+                                "request_kwargs": item["request_kwargs"],
+                                "retries": item["retries"] + 1,
+                                "backoff_time": None,
+                            }
+                        )
                 else:
-                    if response.elapsed.total_seconds() < backoff_time:
-                        time.sleep(backoff_time - response.elapsed.total_seconds())
+                    yield from self.parse_response(response, stream_state=stream_state, stream_slice=stream_slice)
 
-                    self.future_requests.append(
-                        {
-                            "future": self._send_request(item["request"], item["request_kwargs"]),
-                            "request": item["request"],
-                            "request_kwargs": item["request_kwargs"],
-                            "retries": item["retries"] + 1,
-                            "backoff_time": backoff_time,
-                        }
-                    )
-            else:
-                yield from self.parse_response(response, stream_state=stream_state, stream_slice=stream_slice)
+            except requests.exceptions.ReadTimeout:
+                if item["retries"] == self.max_retries:
+                        raise Exception(f"Timeout exceeds")
+                        
+                self.logger.info(f"timeout")
+                self.future_requests.append(
+                    {
+                        "future": self._send_request(item["request"], item["request_kwargs"]),
+                        "request": item["request"],
+                        "request_kwargs": item["request_kwargs"],
+                        "retries": item["retries"] + 1,
+                        "backoff_time": None,
+                    }
+                )
 
 
 class SourceZendeskSupportFullRefreshStream(BaseSourceZendeskSupportStream):
@@ -535,9 +565,34 @@ class TicketForms(SourceZendeskSupportCursorPaginationStream):
     """TicketForms stream: https://developer.zendesk.com/api-reference/ticketing/tickets/ticket_forms/"""
 
 
-class TicketMetrics(SourceZendeskSupportStream):
+class TicketMetrics(SourceZendeskSupportCursorPaginationStream):
     """TicketMetric stream: https://developer.zendesk.com/api-reference/ticketing/tickets/ticket_metrics/"""
+    # can request a maximum of 1,000 results
+    
+    page_size = 1000
+    # ticket audits doesn't have the 'updated_by' field
+    cursor_field = "created_at"
 
+    pagination = 1
+
+    # Root of response is 'audits'. As rule as an endpoint name is equal a response list name
+    response_list_name = "ticket_metrics"
+
+    # This endpoint uses a variant of cursor pagination with some differences from cursor pagination used in other endpoints.
+    def request_params(self, next_page_token: Mapping[str, Any] = None, **kwargs) -> MutableMapping[str, Any]:
+        params = {}
+
+        if self.pagination > 1:
+            params.update({"page": self.pagination})
+
+        if next_page_token:
+            params["cursor"] = next_page_token
+        return params
+
+    def next_page_token(self, response: requests.Response) -> Optional[Mapping[str, Any]]:
+        if response.json().get("next_page"):
+            self.pagination +=1
+            return response.json().get("next_page")
 
 class TicketMetricEvents(SourceZendeskSupportCursorPaginationStream):
     """TicketMetricEvents stream: https://developer.zendesk.com/api-reference/ticketing/tickets/ticket_metric_events/"""
