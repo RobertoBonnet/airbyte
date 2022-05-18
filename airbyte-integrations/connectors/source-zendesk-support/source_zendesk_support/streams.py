@@ -569,30 +569,32 @@ class TicketMetrics(SourceZendeskSupportCursorPaginationStream):
     """TicketMetric stream: https://developer.zendesk.com/api-reference/ticketing/tickets/ticket_metrics/"""
     # can request a maximum of 1,000 results
     
-    page_size = 1000
+    page_size = 100
     # ticket audits doesn't have the 'updated_by' field
-    cursor_field = "created_at"
-
-    pagination = 1
+    cursor_field = "updated_at"
 
     # Root of response is 'audits'. As rule as an endpoint name is equal a response list name
     response_list_name = "ticket_metrics"
 
     # This endpoint uses a variant of cursor pagination with some differences from cursor pagination used in other endpoints.
     def request_params(self, next_page_token: Mapping[str, Any] = None, **kwargs) -> MutableMapping[str, Any]:
-        params = {}
-
-        if self.pagination > 1:
-            params.update({"page": self.pagination})
-
-        if next_page_token:
-            params["cursor"] = next_page_token
+        params = super().request_params(next_page_token=next_page_token, **kwargs)
+        params.update(
+            {
+                "page": next_page_token or 1
+            }
+        )
         return params
 
     def next_page_token(self, response: requests.Response) -> Optional[Mapping[str, Any]]:
-        if response.json().get("next_page"):
-            self.pagination +=1
-            return response.json().get("next_page")
+        next_page = self._parse_next_page_number(response)
+        if not next_page:
+            self._finished = True
+            return None
+
+        if int(next_page) >= 1000:
+            time.sleep(6)
+        return next_page
 
 class TicketMetricEvents(SourceZendeskSupportCursorPaginationStream):
     """TicketMetricEvents stream: https://developer.zendesk.com/api-reference/ticketing/tickets/ticket_metric_events/"""
