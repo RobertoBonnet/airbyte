@@ -343,7 +343,6 @@ class SourceZendeskSupportCursorPaginationStream(SourceZendeskSupportFullRefresh
 
     next_page_field = "next_page"
     prev_start_time = None
-    total_processed_records = 0
 
     def get_updated_state(self, current_stream_state: MutableMapping[str, Any], latest_record: Mapping[str, Any]) -> Mapping[str, Any]:
         # try to save maximum value of a cursor field
