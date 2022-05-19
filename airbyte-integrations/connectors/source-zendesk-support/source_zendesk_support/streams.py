@@ -214,7 +214,6 @@ class SourceZendeskSupportStream(BaseSourceZendeskSupportStream):
         stream_state: Mapping[str, Any] = None,
     ):
         records_count = self.get_api_records_count(stream_slice=stream_slice, stream_state=stream_state)
-        self.logger.info(f"{self.name} - Uso generate_future_requests")
         page_count = ceil(records_count / self.page_size)
         for page_number in range(1, page_count + 1):
             params = self.request_params(stream_state=stream_state, stream_slice=stream_slice)
@@ -277,59 +276,29 @@ class SourceZendeskSupportStream(BaseSourceZendeskSupportStream):
         self.generate_future_requests(sync_mode=sync_mode, cursor_field=cursor_field, stream_slice=stream_slice, stream_state=stream_state)
 
         while len(self.future_requests) > 0:
-            fila = len(self.future_requests)
             item = self.future_requests.popleft()
 
-            try:
-                response = item["future"].result()
-                rate_limit = float(response.headers.get("x-rate-limit", 0))
-                if rate_limit and rate_limit > 0:
-                    sleep_time = (60.0 / rate_limit)
-                    time.sleep(sleep_time)
+            response = item["future"].result()
 
-                rate_limit = response.headers.get('x-rate-limit')
-                rate_limit_remaining = response.headers.get('x-rate-limit-remaining')
-
-                self.logger.info(f"rate_limit - {rate_limit_remaining}/{rate_limit} - fila - {fila}")
-
-                if self.should_retry(response):
-                    backoff_time = self.backoff_time(response)
-                    # backoff_time = 60
-                    retries = item["retries"]
-
-                    self.logger.info(f"retries - {retries} - backoff_time - {backoff_time} - response - {response}")
-                    if item["retries"] == self.max_retries:
-                        raise DefaultBackoffException(request=item["request"], response=response)
-                    else:
-                        # if response.elapsed.total_seconds() < backoff_time:
-                        #     time.sleep(backoff_time - response.elapsed.total_seconds())
-
-                        self.future_requests.append(
-                            {
-                                "future": self._send_request(item["request"], item["request_kwargs"]),
-                                "request": item["request"],
-                                "request_kwargs": item["request_kwargs"],
-                                "retries": item["retries"] + 1,
-                                "backoff_time": None,
-                            }
-                        )
-                else:
-                    yield from self.parse_response(response, stream_state=stream_state, stream_slice=stream_slice)
-
-            except requests.exceptions.ReadTimeout:
+            if self.should_retry(response):
+                backoff_time = self.backoff_time(response)
                 if item["retries"] == self.max_retries:
-                        raise Exception(f"Timeout exceeds")
-                        
-                self.logger.info(f"timeout")
-                self.future_requests.append(
-                    {
-                        "future": self._send_request(item["request"], item["request_kwargs"]),
-                        "request": item["request"],
-                        "request_kwargs": item["request_kwargs"],
-                        "retries": item["retries"] + 1,
-                        "backoff_time": None,
-                    }
-                )
+                    raise DefaultBackoffException(request=item["request"], response=response)
+                else:
+                    if response.elapsed.total_seconds() < backoff_time:
+                        time.sleep(backoff_time - response.elapsed.total_seconds())
+
+                    self.future_requests.append(
+                        {
+                            "future": self._send_request(item["request"], item["request_kwargs"]),
+                            "request": item["request"],
+                            "request_kwargs": item["request_kwargs"],
+                            "retries": item["retries"] + 1,
+                            "backoff_time": backoff_time,
+                        }
+                    )
+            else:
+                yield from self.parse_response(response, stream_state=stream_state, stream_slice=stream_slice)
 
 
 class SourceZendeskSupportFullRefreshStream(BaseSourceZendeskSupportStream):
