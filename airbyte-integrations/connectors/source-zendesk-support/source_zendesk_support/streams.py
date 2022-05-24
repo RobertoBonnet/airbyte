@@ -542,18 +542,17 @@ class TicketForms(SourceZendeskSupportCursorPaginationStream):
 
 class TicketMetrics(SourceZendeskSupportCursorPaginationStream):
     """TicketMetric stream: https://developer.zendesk.com/api-reference/ticketing/tickets/ticket_metrics/"""
-    # can request a maximum of 1,000 results
-    
-    page_size = 100
-    # ticket audits doesn't have the 'updated_by' field
-    cursor_field = "updated_at"
 
-    # Root of response is 'ticket_metrics'. As rule as an endpoint name is equal a response list name
+    page_size = 100
+    cursor_field = "updated_at"
     response_list_name = "ticket_metrics"
+    current_state_aux = None
 
     # This endpoint uses a variant of cursor pagination with some differences from cursor pagination used in other endpoints.
-    def request_params(self, next_page_token: Mapping[str, Any] = None, **kwargs) -> MutableMapping[str, Any]:
+    def request_params(self, stream_state: Mapping[str, Any] = None,  next_page_token: Mapping[str, Any] = None, **kwargs) -> MutableMapping[str, Any]:
         params = super().request_params(next_page_token=next_page_token, **kwargs)
+        stream_state = stream_state or {}
+        self.current_state_aux = stream_state.get(self.cursor_field) or self._start_date if stream_state else self._start_date
         params.update(
             {
                 "page": next_page_token or 1
@@ -562,8 +561,9 @@ class TicketMetrics(SourceZendeskSupportCursorPaginationStream):
         return params
 
     def next_page_token(self, response: requests.Response) -> Optional[Mapping[str, Any]]:
+        count_aux_pagination = [x for x in response.json().get(self.response_list_name) if pendulum.parse(x.get(self.cursor_field)) > pendulum.parse(self.current_state_aux)]
         next_page = self._parse_next_page_number(response)
-        if not next_page:
+        if not next_page or len(count_aux_pagination) == 0:
             self._finished = True
             return None
 
