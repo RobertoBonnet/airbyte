@@ -393,7 +393,7 @@ class SourceZendeskIncrementalExportStream(SourceZendeskSupportCursorPaginationS
     response_list_name: str = None
     sideload_param: str = None
     pagination = 0
-    limit_pagination = 200
+    limit_pagination = 50
 
     @staticmethod
     def check_start_time_param(requested_start_time: int, value: int = 1):
