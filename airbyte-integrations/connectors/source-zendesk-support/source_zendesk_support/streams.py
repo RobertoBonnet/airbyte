@@ -215,6 +215,10 @@ class SourceZendeskSupportStream(BaseSourceZendeskSupportStream):
     ):
         records_count = self.get_api_records_count(stream_slice=stream_slice, stream_state=stream_state)
         page_count = ceil(records_count / self.page_size)
+
+        if page_count > 1000:
+            page_count = 1000
+        
         for page_number in range(1, page_count + 1):
             params = self.request_params(stream_state=stream_state, stream_slice=stream_slice)
             params["page"] = page_number
@@ -235,7 +239,7 @@ class SourceZendeskSupportStream(BaseSourceZendeskSupportStream):
                     "request": request,
                     "request_kwargs": request_kwargs,
                     "retries": 0,
-                    "backoff_time": None,
+                    "backoff_time": None
                 }
             )
 
@@ -277,7 +281,6 @@ class SourceZendeskSupportStream(BaseSourceZendeskSupportStream):
 
         while len(self.future_requests) > 0:
             item = self.future_requests.popleft()
-
             response = item["future"].result()
 
             if self.should_retry(response):
@@ -335,7 +338,6 @@ class SourceZendeskSupportFullRefreshStream(BaseSourceZendeskSupportStream):
         )
         return params
 
-
 class SourceZendeskSupportCursorPaginationStream(SourceZendeskSupportFullRefreshStream):
     """
     Endpoints provide a cursor pagination and sorting mechanism
@@ -390,6 +392,8 @@ class SourceZendeskIncrementalExportStream(SourceZendeskSupportCursorPaginationS
     cursor_field = "updated_at"
     response_list_name: str = None
     sideload_param: str = None
+    pagination = 0
+    limit_pagination = 20
 
     @staticmethod
     def check_start_time_param(requested_start_time: int, value: int = 1):
@@ -410,7 +414,14 @@ class SourceZendeskIncrementalExportStream(SourceZendeskSupportCursorPaginationS
         Returns next_page_token based on `end_of_stream` parameter inside of response
         """
         next_page_token = super().next_page_token(response)
-        return None if response.json().get(END_OF_STREAM_KEY, False) else next_page_token
+
+        if self.pagination >= self.limit_pagination or response.json().get(END_OF_STREAM_KEY, False):
+            return None
+        else:
+            self.pagination += 1
+            return next_page_token
+
+        # return None if response.json().get(END_OF_STREAM_KEY, False) else next_page_token
 
     def request_params(
         self, stream_state: Mapping[str, Any] = None, next_page_token: Mapping[str, Any] = None, **kwargs
@@ -488,11 +499,8 @@ class Groups(SourceZendeskSupportStream):
     """Groups stream: https://developer.zendesk.com/api-reference/ticketing/groups/groups/"""
 
 
-class GroupMemberships(SourceZendeskSupportCursorPaginationStream):
+class GroupMemberships(SourceZendeskSupportStream):
     """GroupMemberships stream: https://developer.zendesk.com/api-reference/ticketing/groups/group_memberships/"""
-
-    cursor_field = "updated_at"
-
 
 class SatisfactionRatings(SourceZendeskSupportCursorPaginationStream):
     """SatisfactionRatings stream: https://developer.zendesk.com/api-reference/ticketing/ticket-management/satisfaction_ratings/
@@ -528,7 +536,6 @@ class SatisfactionRatings(SourceZendeskSupportCursorPaginationStream):
 class TicketFields(SourceZendeskSupportStream):
     """TicketFields stream: https://developer.zendesk.com/api-reference/ticketing/tickets/ticket_fields/"""
 
-
 class TicketForms(SourceZendeskSupportCursorPaginationStream):
     """TicketForms stream: https://developer.zendesk.com/api-reference/ticketing/tickets/ticket_forms/"""
 
@@ -541,7 +548,7 @@ class TicketMetrics(SourceZendeskSupportCursorPaginationStream):
     # ticket audits doesn't have the 'updated_by' field
     cursor_field = "updated_at"
 
-    # Root of response is 'audits'. As rule as an endpoint name is equal a response list name
+    # Root of response is 'ticket_metrics'. As rule as an endpoint name is equal a response list name
     response_list_name = "ticket_metrics"
 
     # This endpoint uses a variant of cursor pagination with some differences from cursor pagination used in other endpoints.
@@ -563,14 +570,15 @@ class TicketMetrics(SourceZendeskSupportCursorPaginationStream):
         if int(next_page) >= 1000:
             time.sleep(6)
         return next_page
-
-class TicketMetricEvents(SourceZendeskSupportCursorPaginationStream):
+    
+class TicketMetricEvents(SourceZendeskIncrementalExportStream):
     """TicketMetricEvents stream: https://developer.zendesk.com/api-reference/ticketing/tickets/ticket_metric_events/"""
 
     cursor_field = "time"
 
-    def path(self, **kwargs):
-        return "incremental/ticket_metric_events"
+    response_list_name: str = "ticket_metric_events"
+
+
 
 
 class Macros(SourceZendeskSupportStream):
