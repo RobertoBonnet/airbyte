@@ -69,6 +69,7 @@ class BaseSourceZendeskSupportStream(HttpStream, ABC):
         self._start_date = start_date
         self._subdomain = subdomain
 
+        self.make_pagination = True
     def request_kwargs(
         self,
         stream_state: Mapping[str, Any],
@@ -143,11 +144,13 @@ class BaseSourceZendeskSupportStream(HttpStream, ABC):
         if not self.cursor_field:
             yield from records
         else:
-            cursor_date = (stream_state or {}).get(self.cursor_field)
+            cursor_date = (stream_state or {}).get(self.cursor_field) or self._start_date if stream_state else self._start_date
             for record in records:
                 updated = record[self.cursor_field]
                 if not cursor_date or updated > cursor_date:
                     yield record
+                else:
+                    self.make_pagination = False
 
 
 class SourceZendeskSupportStream(BaseSourceZendeskSupportStream):
@@ -605,7 +608,8 @@ class TicketAudits(SourceZendeskSupportCursorPaginationStream):
         return params
 
     def next_page_token(self, response: requests.Response) -> Optional[Mapping[str, Any]]:
-        return response.json().get("before_cursor")
+        if self.make_pagination:            
+            return response.json().get("before_cursor")
 
 
 class Tags(SourceZendeskSupportFullRefreshStream):
